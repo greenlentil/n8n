@@ -1,38 +1,46 @@
 ARG NODE_VERSION=20
 
-# 1. Use a builder step to download various dependencies
+# 1. Verwende einen Builder-Container
 FROM node:${NODE_VERSION}-alpine as builder
 
-# Install fonts
-RUN	\
-	apk --no-cache add --virtual fonts msttcorefonts-installer fontconfig && \
-	update-ms-fonts && \
-	fc-cache -f && \
-	apk del fonts && \
-	find  /usr/share/fonts/truetype/msttcorefonts/ -type l -exec unlink {} \;
+# Installiere notwendige Abhängigkeiten
+RUN apk --no-cache add --virtual fonts msttcorefonts-installer fontconfig && \
+    update-ms-fonts && \
+    fc-cache -f && \
+    apk del fonts && \
+    find /usr/share/fonts/truetype/msttcorefonts/ -type l -exec unlink {} \;
 
-# Install git and other OS dependencies
+# Installiere git und weitere Abhängigkeiten
 RUN apk add --update git openssh graphicsmagick tini tzdata ca-certificates libc6-compat jq
 
-# Update npm and install full-uci
+# Installiere n8n und npm-Abhängigkeiten
 COPY .npmrc /usr/local/etc/npmrc
 RUN npm install -g npm@9.9.2 full-icu@1.5.0
+RUN npm install -g n8n   # 🚀 HIER WIRD n8n INSTALLIERT
 
-# Activate corepack, and install pnpm
+# Aktiviert corepack, installiert pnpm
 WORKDIR /tmp
 COPY package.json ./
 RUN corepack enable && corepack prepare --activate
 
-# Cleanup
-RUN	rm -rf /lib/apk/db /var/cache/apk/ /tmp/* /root/.npm /root/.cache/node /opt/yarn*
+# Aufräumen
+RUN rm -rf /lib/apk/db /var/cache/apk/ /tmp/* /root/.npm /root/.cache/node /opt/yarn*
 
-# 2. Start with a new clean image and copy over the added files into a single layer
+# 2. Kopiere die Dateien in ein neues Image
 FROM node:${NODE_VERSION}-alpine
+
+# Kopiere die installierten Abhängigkeiten
 COPY --from=builder / /
 
-# Delete this folder to make the base image backward compatible to be able to build older version images
+# Lösche den Cache für ältere NodeJS-Versionen
 RUN rm -rf /tmp/v8-compile-cache*
 
+# Setze das Arbeitsverzeichnis
 WORKDIR /home/node
 ENV NODE_ICU_DATA /usr/local/lib/node_modules/full-icu
+
+# Exponiere den Port für n8n
 EXPOSE 5678/tcp
+
+# Starte n8n als Standardprozess
+CMD ["n8n"]

@@ -1,3 +1,5 @@
+import FormData from 'form-data';
+
 import type {
 	IDataObject,
 	IExecuteFunctions,
@@ -5,8 +7,8 @@ import type {
 	INodeProperties,
 } from 'n8n-workflow';
 
-import { googleApiRequest } from '../../transport';
-import { driveRLC, folderRLC, updateCommonOptions } from '../common.descriptions';
+import { updateDisplayOptions } from '@utils/utilities';
+
 import {
 	getItemBinaryData,
 	setFileProperties,
@@ -14,7 +16,8 @@ import {
 	setParentFolder,
 	processInChunks,
 } from '../../helpers/utils';
-import { updateDisplayOptions } from '@utils/utilities';
+import { googleApiRequest } from '../../transport';
+import { driveRLC, folderRLC, updateCommonOptions } from '../common.descriptions';
 
 const properties: INodeProperties[] = [
 	{
@@ -96,20 +99,34 @@ export async function execute(this: IExecuteFunctions, i: number): Promise<INode
 	}) as string;
 
 	let uploadId;
+	const metadata = {
+		name,
+		parents: [setParentFolder(folderId, driveId)],
+	};
 	if (Buffer.isBuffer(fileContent)) {
+		const multiPartBody = new FormData();
+		multiPartBody.append('metadata', JSON.stringify(metadata), {
+			contentType: 'application/json',
+		});
+		multiPartBody.append('data', fileContent, {
+			contentType: mimeType,
+			knownLength: contentLength,
+		});
+
 		const response = await googleApiRequest.call(
 			this,
 			'POST',
 			'/upload/drive/v3/files',
-			fileContent,
+			multiPartBody.getBuffer(),
 			{
-				uploadType: 'media',
+				uploadType: 'multipart',
+				supportsAllDrives: true,
 			},
 			undefined,
 			{
 				headers: {
-					'Content-Type': mimeType,
-					'Content-Length': contentLength,
+					'Content-Type': `multipart/related; boundary=${multiPartBody.getBoundary()}`,
+					'Content-Length': multiPartBody.getLengthSync(),
 				},
 			},
 		);
@@ -120,11 +137,17 @@ export async function execute(this: IExecuteFunctions, i: number): Promise<INode
 			this,
 			'POST',
 			'/upload/drive/v3/files',
-			undefined,
-			{ uploadType: 'resumable' },
+			metadata,
+			{
+				uploadType: 'resumable',
+				supportsAllDrives: true,
+			},
 			undefined,
 			{
 				returnFullResponse: true,
+				headers: {
+					'X-Upload-Content-Type': mimeType,
+				},
 			},
 		);
 

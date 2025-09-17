@@ -1,15 +1,15 @@
 import { access, mkdir } from 'fs/promises';
-import { URL } from 'url';
 import type {
 	IExecuteFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { NodeConnectionType } from 'n8n-workflow';
-
+import { NodeConnectionTypes, assertParamIsBoolean, assertParamIsString } from 'n8n-workflow';
 import type { LogOptions, SimpleGit, SimpleGitOptions } from 'simple-git';
 import simpleGit from 'simple-git';
+import { URL } from 'url';
+
 import {
 	addConfigFields,
 	addFields,
@@ -17,6 +17,7 @@ import {
 	commitFields,
 	logFields,
 	pushFields,
+	switchBranchFields,
 	tagFields,
 } from './descriptions';
 
@@ -31,8 +32,9 @@ export class Git implements INodeType {
 		defaults: {
 			name: 'Git',
 		},
-		inputs: [NodeConnectionType.Main],
-		outputs: [NodeConnectionType.Main],
+		usableAsTool: true,
+		inputs: [NodeConnectionTypes.Main],
+		outputs: [NodeConnectionTypes.Main],
 		credentials: [
 			{
 				name: 'gitPassword',
@@ -141,6 +143,12 @@ export class Git implements INodeType {
 						action: 'Return status of current repository',
 					},
 					{
+						name: 'Switch Branch',
+						value: 'switchBranch',
+						description: 'Switch to a different branch',
+						action: 'Switch to a different branch',
+					},
+					{
 						name: 'Tag',
 						value: 'tag',
 						description: 'Create a new tag',
@@ -190,6 +198,7 @@ export class Git implements INodeType {
 			...commitFields,
 			...logFields,
 			...pushFields,
+			...switchBranchFields,
 			...tagFields,
 			// ...userSetupFields,
 		],
@@ -212,6 +221,58 @@ export class Git implements INodeType {
 			}
 
 			return repositoryPath;
+		};
+
+		interface CheckoutBranchOptions {
+			branchName: string;
+			createBranch?: boolean;
+			startPoint?: string;
+			force?: boolean;
+			setUpstream?: boolean;
+			remoteName?: string;
+		}
+
+		const checkoutBranch = async (
+			git: SimpleGit,
+			options: CheckoutBranchOptions,
+		): Promise<void> => {
+			const {
+				branchName,
+				createBranch = true,
+				startPoint,
+				force = false,
+				setUpstream = false,
+				remoteName = 'origin',
+			} = options;
+			try {
+				if (force) {
+					await git.checkout(['-f', branchName]);
+				} else {
+					await git.checkout(branchName);
+				}
+			} catch (error) {
+				if (createBranch) {
+					// Try to create the branch when checkout fails
+					if (startPoint) {
+						await git.checkoutBranch(branchName, startPoint);
+					} else {
+						await git.checkoutLocalBranch(branchName);
+					}
+					// If we reach here, branch creation succeeded
+				} else {
+					// Don't create branch, throw original error
+					throw error;
+				}
+			}
+
+			if (setUpstream) {
+				try {
+					await git.addConfig(`branch.${branchName}.remote`, remoteName);
+					await git.addConfig(`branch.${branchName}.merge`, `refs/heads/${branchName}`);
+				} catch (upstreamError) {
+					// Upstream setup failed but that's non-fatal
+				}
+			}
 		};
 
 		const operation = this.getNodeParameter('operation', 0);
@@ -303,6 +364,14 @@ export class Git implements INodeType {
 					// ----------------------------------
 
 					const message = this.getNodeParameter('message', itemIndex, '') as string;
+					const branch = options.branch;
+					if (branch !== undefined && branch !== '') {
+						assertParamIsString('branch', branch, this.getNode());
+						await checkoutBranch(git, {
+							branchName: branch,
+							setUpstream: true,
+						});
+					}
 
 					let pathsToAdd: string[] | undefined = undefined;
 					if (options.files !== undefined) {
@@ -378,6 +447,16 @@ export class Git implements INodeType {
 					//         push
 					// ----------------------------------
 
+					const branch = options.branch;
+					if (branch !== undefined && branch !== '') {
+						assertParamIsString('branch', branch, this.getNode());
+						await checkoutBranch(git, {
+							branchName: branch,
+							createBranch: false,
+							setUpstream: true,
+						});
+					}
+
 					if (options.repository) {
 						const targetRepository = await prepareRepository(options.targetRepository as string);
 						await git.push(targetRepository);
@@ -439,7 +518,6 @@ export class Git implements INodeType {
 						});
 					}
 
-					// @ts-ignore
 					returnItems.push(
 						...this.helpers.returnJsonArray(data).map((item) => {
 							return {
@@ -464,6 +542,56 @@ export class Git implements INodeType {
 							};
 						}),
 					);
+				} else if (operation === 'switchBranch') {
+					// ----------------------------------
+					//         switchBranch
+					// ----------------------------------
+
+					const branchName = this.getNodeParameter('branchName', itemIndex);
+					assertParamIsString('branchName', branchName, this.getNode());
+
+					const createBranch = options.createBranch;
+					if (createBranch !== undefined) {
+						assertParamIsBoolean('createBranch', createBranch, this.getNode());
+					}
+					const remoteName =
+						typeof options.remoteName === 'string' && options.remoteName
+							? options.remoteName
+							: 'origin';
+
+					const startPoint = options.startPoint;
+					if (startPoint !== undefined) {
+						assertParamIsString('startPoint', startPoint, this.getNode());
+					}
+
+					const setUpstream = options.setUpstream;
+					if (setUpstream !== undefined) {
+						assertParamIsBoolean('setUpstream', setUpstream, this.getNode());
+					}
+
+					const force = options.force;
+					if (force !== undefined) {
+						assertParamIsBoolean('force', force, this.getNode());
+					}
+
+					await checkoutBranch(git, {
+						branchName,
+						createBranch,
+						startPoint,
+						force,
+						setUpstream,
+						remoteName,
+					});
+
+					returnItems.push({
+						json: {
+							success: true,
+							branch: branchName,
+						},
+						pairedItem: {
+							item: itemIndex,
+						},
+					});
 				} else if (operation === 'tag') {
 					// ----------------------------------
 					//         tag

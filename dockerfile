@@ -1,4 +1,4 @@
-ARG NODE_VERSION=20
+ARG NODE_VERSION=22.19.0
 
 # 1. Verwende einen Builder-Container
 FROM node:${NODE_VERSION}-alpine as builder

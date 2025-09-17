@@ -3,10 +3,8 @@
   "version": "1.112.0",
   "private": true,
   "engines": {
-<<<<<<< HEAD
-    "node": ">=22.16",
+    "node": "22.19.0",
     "pnpm": ">=10.2.1"
->>>>>>> upstream/master
   },
   "packageManager": "pnpm@10.12.1",
   "scripts": {
